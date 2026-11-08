@@ -8,7 +8,7 @@ main() (
     local status package hash='a007378525fec19e7fab0d8dfcccd1c17005dffb6256e09d22ef235cedbc5ae2' answer stage
     status=$(profiles status -type enrollment) || return 1
     printf '%s\n' "$status" | grep -Eq '^MDM enrollment: No$' || { echo 'Existing or unknown MDM. Contact IT rather than replacing it.' >&2; return 1; }
-    echo 'Your browser will download the Noovoleum Fleet package. Sign in to company Outline if asked; save it in Downloads.'
+    echo 'Save the browser download in Downloads as fleet-macos.pkg. If a duplicate-name suffix appears, move the older file elsewhere and rename the new download to fleet-macos.pkg before continuing. Sign in to company Outline if asked.'
     open 'https://docs.noovoleum.site/api/attachments.redirect?id=af224cc9-c711-449d-992a-66b3744798ff' || return 1
     read -r -p 'Press Enter after the browser download finishes. '
     package="$HOME/Downloads/fleet-macos.pkg"

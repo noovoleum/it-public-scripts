@@ -19,4 +19,4 @@ python3 test-online.py
 pwsh -NoProfile -File test-online.ps1
 ```
 
-The original `enroll-*` scripts are manual signed-package tools retained for reference, not the employee starting commands. Support: it@noovoleum.com.
+Only the online `install-*` launchers are maintained; the superseded manual enrollment scripts were removed to avoid conflicting entry points. Support: it@noovoleum.com.

@@ -8,6 +8,11 @@ function Assert-NativePowerShell {
     param([bool]$Is64BitOS, [bool]$Is64BitProcess)
     if ($Is64BitOS -and -not $Is64BitProcess) { throw 'Open native 64-bit PowerShell as administrator, not Windows PowerShell (x86), and run again.' }
 }
+function Remove-EnrollmentStage {
+    [CmdletBinding()]
+    param([string]$Path)
+    try { Remove-Item -LiteralPath $Path -Recurse -Force } catch { Write-Warning "Could not remove protected installer staging folder $Path. Ask IT to delete it; do not reinstall solely because cleanup failed." }
+}
 function Install-NoovoleumFleet {
     Assert-NativePowerShell ([Environment]::Is64BitOperatingSystem) ([Environment]::Is64BitProcess)
     if ([Environment]::OSVersion.Platform -ne 'Win32NT') { throw 'Run on Windows.' }
@@ -25,7 +30,7 @@ function Install-NoovoleumFleet {
         'ARM64' { $name='fleet-windows-arm64.msi'; $hash='dea536c3cf567b0919ef7a3315c621fdc6670327a7507e31fee86c5a1f2e2bfd'; $attachment='a731e2ea-7cbd-4ad9-9a82-84959dc3ad6b' }
         default { throw 'Unsupported Windows architecture.' }
     }
-    Write-Output 'The browser will download the Noovoleum Fleet installer. Sign in to company Outline if asked, and save it in Downloads.'
+    Write-Output "Save the browser download in Downloads as $name. If the browser adds a duplicate-name suffix, move the older file elsewhere and rename the new download to $name before continuing. Sign in to company Outline if asked."
     Start-Process ('https://docs.noovoleum.site/api/attachments.redirect?id=' + $attachment)
     $null = Read-Host 'Press Enter after the browser download finishes'
     $package = Join-Path $HOME ('Downloads\' + $name)
@@ -51,7 +56,7 @@ function Install-NoovoleumFleet {
         if ($process.ExitCode -notin @(0,3010)) { throw "Installer failed: $($process.ExitCode). Contact IT." }
         Write-Output 'Installed. Open Fleet Desktop > My device for MDM instructions. IT verifies fresh check-in and MDM On separately.'
         if ($process.ExitCode -eq 3010) { Write-Output 'Windows requests a restart; save your work and arrange it yourself. No automatic restart occurs.' }
-    } finally { Remove-Item -LiteralPath $stage -Recurse -Force }
+    } finally { Remove-EnrollmentStage -Path $stage }
 }
 if ($MyInvocation.InvocationName -ne '.') {
     try { Install-NoovoleumFleet } catch { Write-Error $_ -ErrorAction Continue; exit 1 }
