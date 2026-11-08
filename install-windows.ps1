@@ -4,7 +4,12 @@
 param()
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
+function Assert-NativePowerShell {
+    param([bool]$Is64BitOS, [bool]$Is64BitProcess)
+    if ($Is64BitOS -and -not $Is64BitProcess) { throw 'Open native 64-bit PowerShell as administrator, not Windows PowerShell (x86), and run again.' }
+}
 function Install-NoovoleumFleet {
+    Assert-NativePowerShell ([Environment]::Is64BitOperatingSystem) ([Environment]::Is64BitProcess)
     if ([Environment]::OSVersion.Platform -ne 'Win32NT') { throw 'Run on Windows.' }
     $principal = New-Object Security.Principal.WindowsPrincipal([Security.Principal.WindowsIdentity]::GetCurrent())
     if (-not $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) { throw 'Open PowerShell as administrator and run the command again.' }
