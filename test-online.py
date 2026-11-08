@@ -18,7 +18,7 @@ source "$1"
 mode=$2
 uname() { echo Darwin; }
 profiles() { echo 'MDM enrollment: No'; }
-open() { return 0; }
+curl() { [[ $mode != download-failure ]]; }
 read() { answer=INSTALL; }
 shasum() { if [[ $mode == user-bad-hash ]]; then echo 'bad mock'; else echo 'a007378525fec19e7fab0d8dfcccd1c17005dffb6256e09d22ef235cedbc5ae2  mock'; fi; }
 sudo() {
@@ -32,7 +32,7 @@ sudo() {
 }
 if main; then echo RESULT:success; else echo RESULT:failure; fi
 '''
-for mode in ['user-bad-hash', 'cp', 'chmod', 'bad-hash', 'installer', 'none']:
+for mode in ['download-failure', 'user-bad-hash', 'cp', 'chmod', 'bad-hash', 'installer', 'none']:
     master, slave = pty.openpty()
     try:
         r = subprocess.run(['/bin/bash', '-c', probe, '_', path, mode], stdin=slave, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, timeout=15)
@@ -44,7 +44,7 @@ for mode in ['user-bad-hash', 'cp', 'chmod', 'bad-hash', 'installer', 'none']:
     else:
         assert 'RESULT:failure' in r.stdout and 'Installed.' not in r.stdout, r.stdout
         if mode != 'installer': assert 'MOCK:installer' not in r.stdout, r.stdout
-    if mode == 'user-bad-hash':
+    if mode in ('user-bad-hash', 'download-failure'):
         assert 'MOCK:' not in r.stdout, r.stdout
     else:
         assert 'MOCK:rm' in r.stdout, r.stdout
