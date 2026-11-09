@@ -19,7 +19,7 @@ mode=$2
 uname() { echo Darwin; }
 profiles() { echo 'MDM enrollment: No'; }
 curl() { [[ $mode != download-failure ]]; }
-read() { answer=INSTALL; }
+read() { answer=y; }
 shasum() { if [[ $mode == user-bad-hash ]]; then echo 'bad mock'; else echo 'a007378525fec19e7fab0d8dfcccd1c17005dffb6256e09d22ef235cedbc5ae2  mock'; fi; }
 sudo() {
  echo "MOCK:$1" >&2
