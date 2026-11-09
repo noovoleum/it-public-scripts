@@ -1,18 +1,25 @@
-# Exercise the README starting command; no network, MSI, MDM or native child.
+# Exercise the exact short README command and bootstrap; no network/native child.
 $ErrorActionPreference='Stop'
 $readme=Get-Content -Raw (Join-Path $PSScriptRoot 'README.md')
 $code=[regex]::Match($readme,'(?s)```powershell\s*\n(.*?)```').Groups[1].Value.Trim()
-if(-not $code){throw 'Missing Windows starting command'}
-if($code -notmatch 'it-public-scripts/main/install-windows.ps1' -or $code -match 'Set-ExecutionPolicy|Invoke-Expression|Get-FileHash'){throw 'Expected stable main URL and child-only policy, without stale launcher hash'}
+if($code -ne 'irm https://raw.githubusercontent.com/noovoleum/it-public-scripts/main/bootstrap-windows.ps1 | iex'){throw 'Expected short Windows bootstrap command'}
+$bootstrap=Get-Content -Raw (Join-Path $PSScriptRoot 'bootstrap-windows.ps1')
 $tokens=$null;$errors=$null
-$null=[Management.Automation.Language.Parser]::ParseInput($code,[ref]$tokens,[ref]$errors)
+$null=[Management.Automation.Language.Parser]::ParseInput($bootstrap,[ref]$tokens,[ref]$errors)
 if($errors.Count){throw $errors[0]}
-foreach($case in @('success','download-failure','child-failure')) {
+if($bootstrap -match 'Set-ExecutionPolicy|Invoke-Expression|Get-FileHash'){throw 'Unexpected persistent policy or stale launcher hash'}
+foreach($case in @('success','bootstrap-download-failure','download-failure','child-failure')) {
  & {
   $script:stage=$null;$script:launched=$false
+  function Invoke-RestMethod {
+   param($Uri)
+   if($Uri -ne 'https://raw.githubusercontent.com/noovoleum/it-public-scripts/main/bootstrap-windows.ps1'){throw 'Wrong bootstrap URL'}
+   if($case -eq 'bootstrap-download-failure'){throw 'network failure'}
+   $bootstrap.Replace('& $ps -NoProfile','Invoke-TestChild -NoProfile')
+  }
   function Invoke-WebRequest {
    param($Uri,$OutFile,[switch]$UseBasicParsing)
-   if($Uri -ne 'https://raw.githubusercontent.com/noovoleum/it-public-scripts/main/install-windows.ps1'){throw 'Wrong URL'}
+   if($Uri -ne 'https://raw.githubusercontent.com/noovoleum/it-public-scripts/main/install-windows.ps1'){throw 'Wrong installer URL'}
    $script:stage=$OutFile
    [IO.File]::WriteAllText($OutFile,'# harmless fixture')
    if($case -eq 'download-failure'){throw 'network failure'}
@@ -23,12 +30,11 @@ foreach($case in @('success','download-failure','child-failure')) {
    $script:launched=$true
    $global:LASTEXITCODE=if($case -eq 'child-failure'){7}else{0}
   }
-  $testCode=$code.Replace('& $ps -NoProfile','Invoke-TestChild -NoProfile')
   $failed=$false
-  try { & ([scriptblock]::Create($testCode)) } catch { $failed=$true }
+  try { & ([scriptblock]::Create($code)) } catch { $failed=$true }
   if(($case -eq 'success') -eq $failed){throw "Wrong outcome: $case"}
-  if($script:launched -ne ($case -ne 'download-failure')){throw "Unexpected child execution: $case"}
-  if(Test-Path -LiteralPath $script:stage){throw 'Staged script was not cleaned'}
+  if($script:launched -ne ($case -in @('success','child-failure'))){throw "Unexpected child execution: $case"}
+  if($script:stage -and (Test-Path -LiteralPath $script:stage)){throw 'Staged script was not cleaned'}
  }
 }
-Write-Output 'PASS: stable-main Windows bootstrap syntax, child policy, download refusal, exit propagation and cleanup (native child mocked).'
+Write-Output 'PASS: short Windows command, bootstrap/download refusal, child-only policy, exit propagation and cleanup (native child mocked).'

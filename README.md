@@ -12,18 +12,18 @@ Source/transport/artifact checks are not a claim of successful Windows/Mac/phone
 
 ## Stable starting commands
 
-These commands deliberately fetch the current script on `main` over HTTPS, not a frozen script hash. Future merged launcher updates use the same command. This trusts GitHub and repository write access; only the downloaded **installer packages** remain SHA-256 pinned inside the scripts. Do not replace this with pipe-to-shell or `Invoke-Expression`: staging keeps consent input interactive and avoids executing a partially downloaded response.
+These commands deliberately fetch the current script on `main` over HTTPS, not a frozen script hash. Future merged launcher updates use the same command. This trusts GitHub and repository write access; only the downloaded **installer packages** remain SHA-256 pinned inside the scripts. The short commands execute only a small bootstrap this way. It downloads the full installer launcher to a temporary file before execution and removes it afterward. The Mac bootstrap reconnects stdin to `/dev/tty` so `[Y/n]` reads the keyboard rather than downloaded code; without a terminal it fails closed. The Windows bootstrap runs the launcher in a native PowerShell child with process-only Bypass and propagates its failure. Do not pipe the installer launcher itself into a shell.
 
 **Windows — run in administrator PowerShell:**
 
 ```powershell
-$p=Join-Path $env:TEMP ('noov-enroll-'+[guid]::NewGuid()+'.ps1'); try { Invoke-WebRequest -UseBasicParsing 'https://raw.githubusercontent.com/noovoleum/it-public-scripts/main/install-windows.ps1' -OutFile $p -ErrorAction Stop; $ps=if ([Environment]::Is64BitOperatingSystem -and -not [Environment]::Is64BitProcess) { Join-Path $env:WINDIR 'Sysnative\WindowsPowerShell\v1.0\powershell.exe' } else { Join-Path $env:WINDIR 'System32\WindowsPowerShell\v1.0\powershell.exe' }; & $ps -NoProfile -ExecutionPolicy Bypass -File $p; if ($LASTEXITCODE -ne 0) { throw "Enrollment stopped (exit $LASTEXITCODE). Contact IT with the displayed error." } } finally { Remove-Item -LiteralPath $p -Force -ErrorAction SilentlyContinue }
+irm https://raw.githubusercontent.com/noovoleum/it-public-scripts/main/bootstrap-windows.ps1 | iex
 ```
 
 **Mac — run in ordinary Terminal, without sudo:**
 
 ```bash
-(p=$(mktemp) && trap 'rm -f "$p"' EXIT && curl --fail --silent --show-error --location --proto '=https' --proto-redir '=https' 'https://raw.githubusercontent.com/noovoleum/it-public-scripts/main/install-macos.sh' -o "$p" && /bin/bash "$p")
+curl -fsSL https://raw.githubusercontent.com/noovoleum/it-public-scripts/main/bootstrap-macos.sh | /bin/bash
 ```
 
 ## Windows MDM detection
