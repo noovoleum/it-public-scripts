@@ -10,6 +10,10 @@ The employee page provides copy-paste starting commands, public package links, i
 
 Source/transport/artifact checks are not a claim of successful Windows/Mac/phone enrollment. IT must verify a unique matching hardware identity, fresh agent check-in where applicable, MDM On and harmless management delivery on each pilot. The email is a draft, not automatically sent.
 
+## Windows MDM detection
+
+The launcher queries Windows' [IsDeviceRegisteredWithManagement API](https://learn.microsoft.com/en-us/windows/win32/api/mdmregistration/nf-mdmregistration-isdeviceregisteredwithmanagement), not arbitrary enrollment registry `ProviderID` values. Built-in Deploy / Cloud / Local Authority records and work-account registration alone are not proof of MDM enrollment. Actual MDM registration blocks installation; a failed status query also stops installation. Do not disconnect Microsoft accounts or delete registry entries to bypass this check.
+
 ## Checks
 
 ```sh

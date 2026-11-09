@@ -13,6 +13,25 @@ function Remove-EnrollmentStage {
     param([string]$Path)
     try { Remove-Item -LiteralPath $Path -Recurse -Force } catch { Write-Warning "Could not remove protected installer staging folder $Path. Ask IT to delete it; do not reinstall solely because cleanup failed." }
 }
+function Assert-NoExistingMdm {
+    if (-not ('NoovoleumMdmRegistration' -as [type])) {
+        Add-Type @'
+using System;
+using System.Runtime.InteropServices;
+public static class NoovoleumMdmRegistration {
+    [DllImport("MDMRegistration.dll", CharSet = CharSet.Unicode, ExactSpelling = true)]
+    public static extern int IsDeviceRegisteredWithManagement(
+        [MarshalAs(UnmanagedType.Bool)] out bool registered,
+        uint bufferLength,
+        IntPtr userName);
+}
+'@
+    }
+    $registered = $false
+    $result = [NoovoleumMdmRegistration]::IsDeviceRegisteredWithManagement([ref]$registered, 0, [IntPtr]::Zero)
+    if ($result -ne 0) { throw "Could not determine MDM enrollment (HRESULT $result). Nothing installed; contact IT." }
+    if ($registered) { throw 'Existing MDM detected. Contact IT; no migration or replacement is performed.' }
+}
 function Install-NoovoleumFleet {
     Assert-NativePowerShell ([Environment]::Is64BitOperatingSystem) ([Environment]::Is64BitProcess)
     if ([Environment]::OSVersion.Platform -ne 'Win32NT') { throw 'Run on Windows.' }
@@ -20,10 +39,7 @@ function Install-NoovoleumFleet {
     if (-not $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) { throw 'Open PowerShell as administrator and run the command again.' }
     if (-not [Environment]::UserInteractive -or (Get-Process -Id $PID).SessionId -eq 0) { throw 'Sign in interactively; do not run from a service.' }
     if (Get-Service -Name Orbit -ErrorAction SilentlyContinue) { Write-Output 'Fleet is already installed. Contact IT to verify it; no reinstall performed.'; return }
-    if (Test-Path -LiteralPath 'HKLM:\SOFTWARE\Microsoft\Enrollments') {
-        $existing = @(Get-ChildItem 'HKLM:\SOFTWARE\Microsoft\Enrollments' | ForEach-Object { Get-ItemProperty -LiteralPath $_.PSPath })
-        if (@($existing | Where-Object { $_.PSObject.Properties.Name -contains 'ProviderID' -and $_.ProviderID }).Count) { throw 'Existing MDM detected. Contact IT; no migration or replacement is performed.' }
-    }
+    Assert-NoExistingMdm
     $arch = if ($env:PROCESSOR_ARCHITEW6432) { $env:PROCESSOR_ARCHITEW6432 } else { $env:PROCESSOR_ARCHITECTURE }
     switch ($arch) {
         'AMD64' { $name='fleet-windows-amd64.msi'; $hash='52569b1cdbbda4441bda63794f086a0ce63344dfb7d3c91c6967572b59cd6b22' }
