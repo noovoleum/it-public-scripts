@@ -41,4 +41,42 @@ if($text -notmatch 'finally \{ Remove-EnrollmentStage'){throw 'Missing unconditi
  try { try { throw 'original installer failure' } finally { Remove-EnrollmentStage 'mock-stage' -WarningAction SilentlyContinue } } catch { $message=$_.Exception.Message }
  if($message -ne 'original installer failure'){throw 'Cleanup masked original installer failure'}
 }
-Write-Output 'PASS: online Windows parser, source loading, package pins and trust-before-install static checks; native MSI/ACL execution not exercised.'
+# Simulate the native DLL boundary, not the enrollment decision under test.
+# Built-in authority registry entries must never trigger the old ProviderID heuristic.
+& {
+ Add-Type @'
+using System;
+public static class NoovoleumMdmRegistration {
+ public static bool Registered;
+ public static int Result;
+ public static int IsDeviceRegisteredWithManagement(out bool registered, uint length, IntPtr userName) {
+  registered = Registered;
+  return Result;
+ }
+}
+'@
+ function Get-ChildItem { throw 'MDM detection must not enumerate registry authority entries' }
+ [NoovoleumMdmRegistration]::Registered=$false
+ [NoovoleumMdmRegistration]::Result=0
+ Assert-NoExistingMdm
+ [NoovoleumMdmRegistration]::Registered=$true
+ $message=''
+ try { Assert-NoExistingMdm } catch { $message=$_.Exception.Message }
+ if($message -notmatch '^Existing MDM detected'){throw 'Real MDM must remain blocked'}
+ foreach($registered in @($false,$true)) {
+  [NoovoleumMdmRegistration]::Registered=$registered
+  [NoovoleumMdmRegistration]::Result=-2147467259
+  $message=''
+  try { Assert-NoExistingMdm } catch { $message=$_.Exception.Message }
+  if($message -notmatch '^Could not determine MDM enrollment'){throw 'API failure must fail closed regardless of returned boolean'}
+ }
+}
+# Assert the real call path checks MDM before downloads, staging and consent.
+$entryCommands=@($entry.FindAll({param($n) $n -is [Management.Automation.Language.CommandAst]},$true))
+$guard=@($entryCommands | Where-Object { $_.GetCommandName() -eq 'Assert-NoExistingMdm' })
+if($guard.Count -ne 1){throw 'Installer must call the MDM guard exactly once'}
+foreach($name in @('Invoke-WebRequest','New-Item','Read-Host','Start-Process')) {
+ if(@($entryCommands | Where-Object { $_.GetCommandName() -eq $name -and $_.Extent.StartOffset -lt $guard[0].Extent.StartOffset }).Count){throw 'MDM guard must precede side effects and consent'}
+}
+if($text -match 'Microsoft\\Enrollments|ProviderID'){throw 'Registry ProviderID heuristic must not return'}
+Write-Output 'PASS: Windows parser, trust ordering, native-process and MDM refusal/error decision regressions; actual Windows DLL, MSI and ACL execution not exercised.'
