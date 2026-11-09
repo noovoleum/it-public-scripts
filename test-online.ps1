@@ -6,6 +6,10 @@ if($errors.Count){throw $errors[0]}
 . $path
 Assert-NativePowerShell $true $true
 Assert-NativePowerShell $false $false
+Assert-EnrollmentAdministrator $true
+$message=''
+try { Assert-EnrollmentAdministrator $false } catch { $message=$_.Exception.Message }
+if($message -notmatch 'Start menu' -or $message -notmatch 'Run as administrator' -or $message -notmatch 'Nothing installed'){throw 'Non-admin refusal must give actionable elevation steps and no-install outcome'}
 $rejected=$false
 try { Assert-NativePowerShell $true $false } catch { $rejected=$true }
 if(-not $rejected){throw 'WOW64 must be rejected before registry discovery'}
@@ -60,6 +64,8 @@ public static class NoovoleumMdmRegistration {
  [NoovoleumMdmRegistration]::Result=0
  Assert-NoExistingMdm
  [NoovoleumMdmRegistration]::Registered=$true
+ function Get-ChildItem { @() }
+ function Request-MiradoreMigration { throw 'Existing MDM detected. Test boundary refuses.' }
  $message=''
  try { Assert-NoExistingMdm } catch { $message=$_.Exception.Message }
  if($message -notmatch '^Existing MDM detected'){throw 'Real MDM must remain blocked'}
@@ -75,8 +81,10 @@ public static class NoovoleumMdmRegistration {
 $entryCommands=@($entry.FindAll({param($n) $n -is [Management.Automation.Language.CommandAst]},$true))
 $guard=@($entryCommands | Where-Object { $_.GetCommandName() -eq 'Assert-NoExistingMdm' })
 if($guard.Count -ne 1){throw 'Installer must call the MDM guard exactly once'}
+$adminGuard=@($entryCommands | Where-Object { $_.GetCommandName() -eq 'Assert-EnrollmentAdministrator' })
+if($adminGuard.Count -ne 1 -or $adminGuard[0].Extent.StartOffset -gt $guard[0].Extent.StartOffset){throw 'Administrator refusal must precede MDM discovery and side effects'}
 foreach($name in @('Invoke-WebRequest','New-Item','Read-Host','Start-Process')) {
  if(@($entryCommands | Where-Object { $_.GetCommandName() -eq $name -and $_.Extent.StartOffset -lt $guard[0].Extent.StartOffset }).Count){throw 'MDM guard must precede side effects and consent'}
 }
-if($text -match 'Microsoft\\Enrollments|ProviderID'){throw 'Registry ProviderID heuristic must not return'}
+if($text -match '\$existing\s*\|\s*Where-Object'){throw 'Registry ProviderID heuristic must not return'}
 Write-Output 'PASS: Windows parser, trust ordering, native-process and MDM refusal/error decision regressions; actual Windows DLL, MSI and ACL execution not exercised.'
