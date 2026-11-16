@@ -4,7 +4,7 @@ Start here: [MDM — Enroll Your Work Device](https://docs.noovoleum.site/doc/md
 
 `install-windows.ps1` and `install-macos.sh` automatically download the appropriate **public GitHub release installer**, verify its pinned SHA-256, stage the checked bytes securely and invoke the native installer. No browser, login, Downloads-folder selection or manual trust values are required. You need internet, local installation permission and an IT-approved work device. Native consent prompts remain.
 
-These IT-generated packages are **not signed with a Noovoleum publisher certificate**. Exact-byte hash validation is used instead; platform consent/security prompts remain. Do not disable Gatekeeper or antivirus, or change persistent execution-policy settings. The approved starting command uses an installer-only PowerShell child process with `-ExecutionPolicy Bypass`; organization-enforced restrictions still apply. Existing Fleet/MDM is sent to IT for verification rather than automatically replaced. Windows MDM's documented Defender tamper-protection impact is disclosed before installation. No wipe, reset, automatic restart, script execution capability or custody changes are enabled by these launchers.
+These IT-generated packages are **not signed with a Noovoleum publisher certificate**. Exact-byte hash validation is used instead; platform consent/security prompts remain. Do not disable Gatekeeper or antivirus, or change persistent execution-policy settings. The approved starting command uses an installer-only PowerShell child process with `-ExecutionPolicy Bypass`; organization-enforced restrictions still apply. Other existing MDM is sent to IT rather than replaced; an existing Noovoleum Fleet agent on Windows is updated in place. Windows MDM's documented Defender tamper-protection impact is disclosed before installation. No wipe, reset, automatic restart or custody changes are enabled by these launchers. The Windows agent allows IT-run maintenance scripts (for example, installing the remote-support agent).
 
 The employee page provides copy-paste starting commands, public package links, iPhone/iPad and Android work-profile QRs and native approval steps. The owner approved public installer distribution: packages contain an extractable reusable enrollment key, not an administrator token. Anyone can register a device with that key; enrollment must never be treated as company-access entitlement. Do not distribute sensitive configuration or credentials merely because a device is enrolled. The native mobile page detects the platform, so the separately labelled QR images may encode the same entry URL. Fully managed Android is a separate IT-assisted new-device workflow, not a reset of an existing phone.
 
@@ -25,6 +25,10 @@ irm https://raw.githubusercontent.com/noovoleum/it-public-scripts/main/bootstrap
 ```bash
 curl -fsSL https://raw.githubusercontent.com/noovoleum/it-public-scripts/main/bootstrap-macos.sh | /bin/bash
 ```
+
+## Updating an existing Windows agent
+
+Rerunning the same Windows command on a laptop that already has Fleet updates the agent in place to the `enrollment-v2` package. That package is identical to v1 except that IT script execution is turned on. The MSI major upgrade keeps the same Fleet device record and does not touch MDM enrollment, so the new-install MDM check is skipped on this path. An agent that already has scripts enabled is left alone. Fleet Desktop shows the device again after its next check-in, with no further steps for the employee.
 
 ## Windows MDM detection
 
