@@ -93,6 +93,8 @@ function Get-FleetAgentState {
     if (-not (Get-Service -Name 'Fleet osquery' -ErrorAction SilentlyContinue)) { return 'absent' }
     $props = Get-ItemProperty -LiteralPath 'HKLM:\SYSTEM\CurrentControlSet\Services\Fleet osquery' -ErrorAction Stop
     $environment = if ($props.PSObject.Properties['Environment']) { @($props.Environment) } else { @() }
+    # All fleetd MSIs share one UpgradeCode: never upgrade another organization's agent into ours.
+    if ($environment -inotcontains 'ORBIT_FLEET_URL=https://mdm.noovoleum.site') { return 'foreign' }
     if ($environment -icontains 'ORBIT_ENABLE_SCRIPTS=true') { return 'scripts-enabled' }
     return 'scripts-disabled'
 }
@@ -104,6 +106,7 @@ function Install-NoovoleumFleet {
     if (-not [Environment]::UserInteractive -or (Get-Process -Id $PID).SessionId -eq 0) { throw 'Sign in interactively; do not run from a service.' }
     $state = Get-FleetAgentState
     if ($state -eq 'scripts-enabled') { Write-Output 'Fleet is already installed and up to date. Nothing to do.'; return }
+    if ($state -eq 'foreign') { throw 'A Fleet agent for another server is installed. Nothing changed; contact it@noovoleum.com.' }
     $upgrade = $state -eq 'scripts-disabled'
     # An in-place agent update keeps the same Fleet device record and does not touch MDM enrollment,
     # so the new-install MDM guard (which would see Fleet's own MDM) applies only to fresh installs.

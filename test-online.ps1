@@ -92,7 +92,7 @@ if($text -match '\$existing\s*\|\s*Where-Object'){throw 'Registry ProviderID heu
  function Get-Service { $null }
  if((Get-FleetAgentState) -ne 'absent'){throw 'No Fleet service must mean absent'}
  function Get-Service { [pscustomobject]@{Name='Fleet osquery'} }
- foreach($case in @(@{env=@('ORBIT_FLEET_URL=x','ORBIT_ENABLE_SCRIPTS=False');want='scripts-disabled'},@{env=@('ORBIT_ENABLE_SCRIPTS=True');want='scripts-enabled'},@{env=$null;want='scripts-disabled'})) {
+ foreach($case in @(@{env=@('ORBIT_FLEET_URL=https://mdm.noovoleum.site','ORBIT_ENABLE_SCRIPTS=False');want='scripts-disabled'},@{env=@('ORBIT_ENABLE_SCRIPTS=True','ORBIT_FLEET_URL=https://mdm.noovoleum.site');want='scripts-enabled'},@{env=@('ORBIT_FLEET_URL=https://fleet.other.example','ORBIT_ENABLE_SCRIPTS=False');want='foreign'},@{env=@('ORBIT_FLEET_URL=https://mdm.noovoleum.site.evil.test');want='foreign'},@{env=$null;want='foreign'})) {
   $script:env=$case.env
   function Get-ItemProperty { if($null -eq $script:env){[pscustomobject]@{}}else{[pscustomobject]@{Environment=$script:env}} }
   if((Get-FleetAgentState) -ne $case.want){throw "Expected $($case.want) for $($case.env -join ',')"}
@@ -102,5 +102,7 @@ if($text -match '\$existing\s*\|\s*Where-Object'){throw 'Registry ProviderID heu
 $guardIf=$entry.Find({param($n) $n -is [Management.Automation.Language.IfStatementAst] -and $n.Extent.Text -match 'Assert-NoExistingMdm'},$true)
 if($null -eq $guardIf -or $guardIf.Clauses[0].Item1.Extent.Text -notmatch '-not \$upgrade'){throw 'MDM guard must run only when not upgrading'}
 if($text -match "Get-Service -Name Orbit"){throw 'Fleet service is named "Fleet osquery", not Orbit'}
+$foreign=$entry.Find({param($n) $n -is [Management.Automation.Language.IfStatementAst] -and $n.Clauses[0].Item1.Extent.Text -match "'foreign'"},$true)
+if($null -eq $foreign -or $foreign.Clauses[0].Item2.Extent.Text -notmatch 'throw' -or $foreign.Extent.StartOffset -gt $guardIf.Extent.StartOffset){throw 'Foreign Fleet agent must be refused before any install path'}
 if($text -notmatch 'releases/download/enrollment-v2/'){throw 'Launcher must download the scripts-enabled release'}
 Write-Output 'PASS: Windows parser, trust ordering, native-process and MDM refusal/error decision regressions; actual Windows DLL, MSI and ACL execution not exercised.'
