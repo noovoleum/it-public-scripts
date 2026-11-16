@@ -87,22 +87,67 @@ foreach($name in @('Invoke-WebRequest','New-Item','Read-Host','Start-Process')) 
  if(@($entryCommands | Where-Object { $_.GetCommandName() -eq $name -and $_.Extent.StartOffset -lt $guard[0].Extent.StartOffset }).Count){throw 'MDM guard must precede side effects and consent'}
 }
 if($text -match '\$existing\s*\|\s*Where-Object'){throw 'Registry ProviderID heuristic must not return'}
-# Existing-agent detection: real service name, scripts flag read from the service Environment.
+# Existing-agent detection: exact service name and registry path, scripts flag from the service Environment.
 & {
- function Get-Service { $null }
+ function Get-Service { param($Name) if($Name -ne 'Fleet osquery'){throw "Wrong service name $Name"}; $null }
  if((Get-FleetAgentState) -ne 'absent'){throw 'No Fleet service must mean absent'}
- function Get-Service { [pscustomobject]@{Name='Fleet osquery'} }
- foreach($case in @(@{env=@('ORBIT_FLEET_URL=https://mdm.noovoleum.site','ORBIT_ENABLE_SCRIPTS=False');want='scripts-disabled'},@{env=@('ORBIT_ENABLE_SCRIPTS=True','ORBIT_FLEET_URL=https://mdm.noovoleum.site');want='scripts-enabled'},@{env=@('ORBIT_FLEET_URL=https://fleet.other.example','ORBIT_ENABLE_SCRIPTS=False');want='foreign'},@{env=@('ORBIT_FLEET_URL=https://mdm.noovoleum.site.evil.test');want='foreign'},@{env=$null;want='foreign'})) {
+ function Get-Service { param($Name) if($Name -ne 'Fleet osquery'){throw "Wrong service name $Name"}; [pscustomobject]@{Name=$Name} }
+ $url='ORBIT_FLEET_URL=https://mdm.noovoleum.site'
+ foreach($case in @(@{env=@($url,'ORBIT_ENABLE_SCRIPTS=False');want='scripts-disabled'},@{env=@('ORBIT_ENABLE_SCRIPTS=True',$url);want='scripts-enabled'},@{env=@('ORBIT_FLEET_URL=https://fleet.other.example','ORBIT_ENABLE_SCRIPTS=False');want='unrecognized'},@{env=@('ORBIT_FLEET_URL=https://mdm.noovoleum.site.evil.test');want='unrecognized'},@{env=@("$url/");want='unrecognized'},@{env=$null;want='unrecognized'})) {
   $script:env=$case.env
-  function Get-ItemProperty { if($null -eq $script:env){[pscustomobject]@{}}else{[pscustomobject]@{Environment=$script:env}} }
+  function Get-ItemProperty { param($LiteralPath) if($LiteralPath -ne 'HKLM:\SYSTEM\CurrentControlSet\Services\Fleet osquery'){throw "Wrong registry path $LiteralPath"}; if($null -eq $script:env){[pscustomobject]@{}}else{[pscustomobject]@{Environment=$script:env}} }
   if((Get-FleetAgentState) -ne $case.want){throw "Expected $($case.want) for $($case.env -join ',')"}
  }
 }
-# Upgrade path must skip the new-install MDM guard (Fleet's own MDM would block it); fresh installs keep it.
-$guardIf=$entry.Find({param($n) $n -is [Management.Automation.Language.IfStatementAst] -and $n.Extent.Text -match 'Assert-NoExistingMdm'},$true)
-if($null -eq $guardIf -or $guardIf.Clauses[0].Item1.Extent.Text -notmatch '-not \$upgrade'){throw 'MDM guard must run only when not upgrading'}
-if($text -match "Get-Service -Name Orbit"){throw 'Fleet service is named "Fleet osquery", not Orbit'}
-$foreign=$entry.Find({param($n) $n -is [Management.Automation.Language.IfStatementAst] -and $n.Clauses[0].Item1.Extent.Text -match "'foreign'"},$true)
-if($null -eq $foreign -or $foreign.Clauses[0].Item2.Extent.Text -notmatch 'throw' -or $foreign.Extent.StartOffset -gt $guardIf.Extent.StartOffset){throw 'Foreign Fleet agent must be refused before any install path'}
+foreach($pair in @(@('absent','install'),@('scripts-disabled','upgrade'),@('scripts-enabled','none'),@('unrecognized','refuse'),@('','refuse'))) {
+ if((Get-FleetAgentAction $pair[0]) -ne $pair[1]){throw "State $($pair[0]) must map to $($pair[1])"}
+}
+# Drive the real entry point per action with every Windows boundary stubbed; record what it does.
+foreach($case in @(
+ @{action='none';     answer=$true;  mdm=0;expectPrompt=$null;exit=0;install=$false;fail=$null},
+ @{action='refuse';   answer=$true;  mdm=0;expectPrompt=$null;exit=0;install=$false;fail='not recognised'},
+ @{action='upgrade';  answer=$true;  mdm=0;expectPrompt='Update Fleet now?';exit=0;install=$true; fail=$null},
+ @{action='upgrade';  answer=$false; mdm=0;expectPrompt='Update Fleet now?';exit=0;install=$false;fail='Cancelled. Fleet left unchanged'},
+ @{action='install';  answer=$true;  mdm=1;expectPrompt='Install Fleet and accept the disclosed security-policy impact?';exit=0;install=$true;fail=$null},
+ @{action='upgrade';  answer=$true;  mdm=0;expectPrompt='Update Fleet now?';exit=1603;           install=$true; fail='Do not rerun'},
+ @{action='install';  answer=$true;  mdm=1;expectPrompt='Install Fleet and accept the disclosed security-policy impact?';exit=1603;install=$true;fail='^Installer failed'}
+)) {
+ & {
+  $script:c=$case;$script:mdmCalls=0;$script:prompts=@();$script:installed=$false
+  function Assert-NativePowerShell {}
+  function Assert-EnrollmentAdministrator {}
+  function Get-Process { [pscustomobject]@{SessionId=1} }
+  function Get-FleetAgentState { 'stub' }
+  function Get-FleetAgentAction { $script:c.action }
+  function Assert-NoExistingMdm { $script:mdmCalls++ }
+  function Confirm-EnrollmentAction { param($Question) $script:prompts+=$Question; $script:c.answer }
+  function New-Item {}; function Set-Acl {}; function Invoke-WebRequest {}; function Remove-EnrollmentStage {}
+  function Get-FileHash { [pscustomobject]@{Hash=$hash} }
+  function Start-Process { $script:installed=$true; [pscustomobject]@{ExitCode=$(if($script:c.exit){$script:c.exit}else{0})} }
+  $env:PROCESSOR_ARCHITECTURE='AMD64'; $env:PROCESSOR_ARCHITEW6432=$null; $env:ProgramFiles=[IO.Path]::GetTempPath(); $env:SystemRoot='C:\Windows'
+  # Static .NET platform/identity probes cannot be stubbed; run the real body with only those lines neutralised.
+  $body=$entry.Body.Extent.Text.Trim(); $body=$body.Substring(1,$body.Length-2)
+  foreach($probe in @("if ([Environment]::OSVersion.Platform -ne 'Win32NT') { throw 'Run on Windows.' }",'$principal = New-Object Security.Principal.WindowsPrincipal([Security.Principal.WindowsIdentity]::GetCurrent())','Assert-EnrollmentAdministrator ($principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator))',"if (-not [Environment]::UserInteractive -or (Get-Process -Id `$PID).SessionId -eq 0) { throw 'Sign in interactively; do not run from a service.' }")) {
+   if(-not $body.Contains($probe)){throw "Entry probe changed: $probe"}
+   $body=$body.Replace($probe,'')
+  }
+  # Windows-only ACL construction for the staging folder: stub the object so the rest of the flow still runs.
+  $acl='$acl = New-Object Security.AccessControl.DirectorySecurity'
+  if(-not $body.Contains($acl)){throw 'Staging ACL construction changed'}
+  $body=$body.Replace($acl,'$acl = [pscustomobject]@{} | Add-Member -PassThru ScriptMethod SetAccessRuleProtection {} | Add-Member -PassThru ScriptMethod AddAccessRule {}')
+  function New-Object { [pscustomobject]@{} }
+  $message=$null
+  try { $null=& ([scriptblock]::Create($body)) } catch { $message=$_.Exception.Message }
+  $label="$($case.action)/answer=$($case.answer)/exit=$($case.exit)"
+  if($case.fail){ if($message -notmatch $case.fail){throw "$label expected failure '$($case.fail)', got '$message'"} } elseif($message){ throw "$label unexpected failure: $message" }
+  if($script:mdmCalls -ne $case.mdm){throw "$label MDM guard calls $($script:mdmCalls), expected $($case.mdm)"}
+  if($script:installed -ne $case.install){throw "$label installer ran=$($script:installed), expected $($case.install)"}
+  $wantPrompts=@($case.expectPrompt | Where-Object {$_})
+  if(($script:prompts -join '|') -ne ($wantPrompts -join '|')){throw "$label prompts '$($script:prompts -join '|')', expected '$($wantPrompts -join '|')'"}
+ }
+}
+if($text -match "Get-Service\s+-Name\s+'?Orbit"){throw 'Fleet service is named "Fleet osquery", not Orbit'}
 if($text -notmatch 'releases/download/enrollment-v2/'){throw 'Launcher must download the scripts-enabled release'}
+if($text -notmatch "-ArgumentList @\('/i',\('`"'\+\`$staged\+'`"'\),'/norestart'\)"){throw 'msiexec arguments changed (no /quiet, /passive or extra properties)'}
+if($text -notmatch '\.Hash -ine \$hash\) \{ throw'){throw 'Hash mismatch must refuse installation'}
 Write-Output 'PASS: Windows parser, trust ordering, native-process and MDM refusal/error decision regressions; actual Windows DLL, MSI and ACL execution not exercised.'

@@ -93,10 +93,19 @@ function Get-FleetAgentState {
     if (-not (Get-Service -Name 'Fleet osquery' -ErrorAction SilentlyContinue)) { return 'absent' }
     $props = Get-ItemProperty -LiteralPath 'HKLM:\SYSTEM\CurrentControlSet\Services\Fleet osquery' -ErrorAction Stop
     $environment = if ($props.PSObject.Properties['Environment']) { @($props.Environment) } else { @() }
-    # All fleetd MSIs share one UpgradeCode: never upgrade another organization's agent into ours.
-    if ($environment -inotcontains 'ORBIT_FLEET_URL=https://mdm.noovoleum.site') { return 'foreign' }
+    # All fleetd MSIs share one UpgradeCode: only upgrade an agent positively identified as ours.
+    if ($environment -inotcontains 'ORBIT_FLEET_URL=https://mdm.noovoleum.site') { return 'unrecognized' }
     if ($environment -icontains 'ORBIT_ENABLE_SCRIPTS=true') { return 'scripts-enabled' }
     return 'scripts-disabled'
+}
+function Get-FleetAgentAction {
+    param([string]$State)
+    switch ($State) {
+        'absent' { return 'install' }
+        'scripts-disabled' { return 'upgrade' }
+        'scripts-enabled' { return 'none' }
+        default { return 'refuse' }
+    }
 }
 function Install-NoovoleumFleet {
     Assert-NativePowerShell ([Environment]::Is64BitOperatingSystem) ([Environment]::Is64BitProcess)
@@ -104,10 +113,10 @@ function Install-NoovoleumFleet {
     $principal = New-Object Security.Principal.WindowsPrincipal([Security.Principal.WindowsIdentity]::GetCurrent())
     Assert-EnrollmentAdministrator ($principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator))
     if (-not [Environment]::UserInteractive -or (Get-Process -Id $PID).SessionId -eq 0) { throw 'Sign in interactively; do not run from a service.' }
-    $state = Get-FleetAgentState
-    if ($state -eq 'scripts-enabled') { Write-Output 'Fleet is already installed and up to date. Nothing to do.'; return }
-    if ($state -eq 'foreign') { throw 'A Fleet agent for another server is installed. Nothing changed; contact it@noovoleum.com.' }
-    $upgrade = $state -eq 'scripts-disabled'
+    $action = Get-FleetAgentAction (Get-FleetAgentState)
+    if ($action -eq 'none') { Write-Output 'Fleet is already installed and up to date. Nothing to do.'; return }
+    if ($action -eq 'refuse') { throw 'The installed Fleet agent is not recognised as the current Noovoleum agent. Nothing changed; contact it@noovoleum.com.' }
+    $upgrade = $action -eq 'upgrade'
     # An in-place agent update keeps the same Fleet device record and does not touch MDM enrollment,
     # so the new-install MDM guard (which would see Fleet's own MDM) applies only to fresh installs.
     if (-not $upgrade) { Assert-NoExistingMdm }
@@ -143,7 +152,11 @@ function Install-NoovoleumFleet {
         Invoke-WebRequest -UseBasicParsing -Uri ('https://github.com/noovoleum/it-public-scripts/releases/download/enrollment-v2/' + $name) -OutFile $staged
         if ((Get-FileHash -LiteralPath $staged -Algorithm SHA256).Hash -ine $hash) { throw 'Package hash mismatch; nothing installed. Contact IT.' }
         $process = Start-Process "$env:SystemRoot\System32\msiexec.exe" -ArgumentList @('/i',('"'+$staged+'"'),'/norestart') -Wait -PassThru
-        if ($process.ExitCode -notin @(0,3010)) { throw "Installer failed: $($process.ExitCode). Contact IT." }
+        if ($process.ExitCode -notin @(0,3010)) {
+            # A major upgrade removes the old agent before installing the new one, so a failure can leave none.
+            if ($upgrade) { throw "Update failed: $($process.ExitCode). The Fleet agent may be missing. Do not rerun this command; contact it@noovoleum.com." }
+            throw "Installer failed: $($process.ExitCode). Contact IT."
+        }
         if ($upgrade) { Write-Output 'Fleet updated. No further steps; IT verifies the next check-in.' }
         else { Write-Output 'Installed. Open Fleet Desktop > My device for MDM instructions. IT verifies fresh check-in and MDM On separately.' }
         if ($process.ExitCode -eq 3010) { Write-Output 'Windows requests a restart; save your work and arrange it yourself. No automatic restart occurs.' }
