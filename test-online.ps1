@@ -17,7 +17,7 @@ $entry=$ast.Find({param($node) $node -is [Management.Automation.Language.Functio
 if($entry.Body.EndBlock.Statements[0].Extent.Text -notmatch '^Assert-NativePowerShell '){throw 'Native-process guard must be first'}
 # Validate bound package identities and the protected trust-check-before-install ordering.
 $text=Get-Content -LiteralPath $path -Raw
-foreach($value in @('52569b1cdbbda4441bda63794f086a0ce63344dfb7d3c91c6967572b59cd6b22','dea536c3cf567b0919ef7a3315c621fdc6670327a7507e31fee86c5a1f2e2bfd')) {
+foreach($value in @('ae414eab10c533e252a05b2b0f601baeaa5b5184f3023642898ab0de8ca4a6bc','1f90986109b68be5b5aec3bf82236c7f00ab976b490c50958226596be3654057')) {
  if($text -notmatch $value){throw 'Missing package pin'}
 }
 function Assert-TrustOrder($Tree) {
@@ -87,4 +87,20 @@ foreach($name in @('Invoke-WebRequest','New-Item','Read-Host','Start-Process')) 
  if(@($entryCommands | Where-Object { $_.GetCommandName() -eq $name -and $_.Extent.StartOffset -lt $guard[0].Extent.StartOffset }).Count){throw 'MDM guard must precede side effects and consent'}
 }
 if($text -match '\$existing\s*\|\s*Where-Object'){throw 'Registry ProviderID heuristic must not return'}
+# Existing-agent detection: real service name, scripts flag read from the service Environment.
+& {
+ function Get-Service { $null }
+ if((Get-FleetAgentState) -ne 'absent'){throw 'No Fleet service must mean absent'}
+ function Get-Service { [pscustomobject]@{Name='Fleet osquery'} }
+ foreach($case in @(@{env=@('ORBIT_FLEET_URL=x','ORBIT_ENABLE_SCRIPTS=False');want='scripts-disabled'},@{env=@('ORBIT_ENABLE_SCRIPTS=True');want='scripts-enabled'},@{env=$null;want='scripts-disabled'})) {
+  $script:env=$case.env
+  function Get-ItemProperty { if($null -eq $script:env){[pscustomobject]@{}}else{[pscustomobject]@{Environment=$script:env}} }
+  if((Get-FleetAgentState) -ne $case.want){throw "Expected $($case.want) for $($case.env -join ',')"}
+ }
+}
+# Upgrade path must skip the new-install MDM guard (Fleet's own MDM would block it); fresh installs keep it.
+$guardIf=$entry.Find({param($n) $n -is [Management.Automation.Language.IfStatementAst] -and $n.Extent.Text -match 'Assert-NoExistingMdm'},$true)
+if($null -eq $guardIf -or $guardIf.Clauses[0].Item1.Extent.Text -notmatch '-not \$upgrade'){throw 'MDM guard must run only when not upgrading'}
+if($text -match "Get-Service -Name Orbit"){throw 'Fleet service is named "Fleet osquery", not Orbit'}
+if($text -notmatch 'releases/download/enrollment-v2/'){throw 'Launcher must download the scripts-enabled release'}
 Write-Output 'PASS: Windows parser, trust ordering, native-process and MDM refusal/error decision regressions; actual Windows DLL, MSI and ACL execution not exercised.'

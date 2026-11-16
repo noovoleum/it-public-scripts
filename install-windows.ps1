@@ -88,23 +88,41 @@ public static class NoovoleumMdmRegistration {
         throw 'Existing MDM detected. Contact IT; installation remains blocked.'
     }
 }
+function Get-FleetAgentState {
+    # The fleetd MSI installs service "Fleet osquery" and passes settings through its Environment value.
+    if (-not (Get-Service -Name 'Fleet osquery' -ErrorAction SilentlyContinue)) { return 'absent' }
+    $props = Get-ItemProperty -LiteralPath 'HKLM:\SYSTEM\CurrentControlSet\Services\Fleet osquery' -ErrorAction Stop
+    $environment = if ($props.PSObject.Properties['Environment']) { @($props.Environment) } else { @() }
+    if ($environment -icontains 'ORBIT_ENABLE_SCRIPTS=true') { return 'scripts-enabled' }
+    return 'scripts-disabled'
+}
 function Install-NoovoleumFleet {
     Assert-NativePowerShell ([Environment]::Is64BitOperatingSystem) ([Environment]::Is64BitProcess)
     if ([Environment]::OSVersion.Platform -ne 'Win32NT') { throw 'Run on Windows.' }
     $principal = New-Object Security.Principal.WindowsPrincipal([Security.Principal.WindowsIdentity]::GetCurrent())
     Assert-EnrollmentAdministrator ($principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator))
     if (-not [Environment]::UserInteractive -or (Get-Process -Id $PID).SessionId -eq 0) { throw 'Sign in interactively; do not run from a service.' }
-    if (Get-Service -Name Orbit -ErrorAction SilentlyContinue) { Write-Output 'Fleet is already installed. Contact IT to verify it; no reinstall performed.'; return }
-    Assert-NoExistingMdm
+    $state = Get-FleetAgentState
+    if ($state -eq 'scripts-enabled') { Write-Output 'Fleet is already installed and up to date. Nothing to do.'; return }
+    $upgrade = $state -eq 'scripts-disabled'
+    # An in-place agent update keeps the same Fleet device record and does not touch MDM enrollment,
+    # so the new-install MDM guard (which would see Fleet's own MDM) applies only to fresh installs.
+    if (-not $upgrade) { Assert-NoExistingMdm }
     $arch = if ($env:PROCESSOR_ARCHITEW6432) { $env:PROCESSOR_ARCHITEW6432 } else { $env:PROCESSOR_ARCHITECTURE }
     switch ($arch) {
-        'AMD64' { $name='fleet-windows-amd64.msi'; $hash='52569b1cdbbda4441bda63794f086a0ce63344dfb7d3c91c6967572b59cd6b22' }
-        'ARM64' { $name='fleet-windows-arm64.msi'; $hash='dea536c3cf567b0919ef7a3315c621fdc6670327a7507e31fee86c5a1f2e2bfd' }
+        'AMD64' { $name='fleet-windows-amd64.msi'; $hash='ae414eab10c533e252a05b2b0f601baeaa5b5184f3023642898ab0de8ca4a6bc' }
+        'ARM64' { $name='fleet-windows-arm64.msi'; $hash='1f90986109b68be5b5aec3bf82236c7f00ab976b490c50958226596be3654057' }
         default { throw 'Unsupported Windows architecture.' }
     }
     Write-Output 'This IT-generated MSI has no Noovoleum publisher signature. This launcher verifies its exact approved hash.'
-    Write-Output 'Fleet Windows MDM can change Defender tamper protection. Proceed only on an IT-approved work device after IT has approved this security impact.'
-    if (-not (Confirm-EnrollmentAction 'Install Fleet and accept the disclosed security-policy impact?')) { throw 'Cancelled.' }
+    Write-Output 'This Fleet agent lets IT run approved maintenance scripts on this device, for example installing the remote-support agent.'
+    if ($upgrade) {
+        Write-Output 'Fleet is already installed. This updates it in place: same device record, MDM enrollment unchanged.'
+        if (-not (Confirm-EnrollmentAction 'Update Fleet now?')) { throw 'Cancelled. Fleet left unchanged.' }
+    } else {
+        Write-Output 'Fleet Windows MDM can change Defender tamper protection. Proceed only on an IT-approved work device after IT has approved this security impact.'
+        if (-not (Confirm-EnrollmentAction 'Install Fleet and accept the disclosed security-policy impact?')) { throw 'Cancelled.' }
+    }
     $stage = Join-Path $env:ProgramFiles ('Noovoleum-enroll-' + [guid]::NewGuid().ToString('N'))
     $null = New-Item -ItemType Directory -Path $stage
     try {
@@ -119,11 +137,12 @@ function Install-NoovoleumFleet {
         $staged = Join-Path $stage 'fleet.msi'
         Write-Output 'Downloading Noovoleum Fleet installer; no login required.'
         [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
-        Invoke-WebRequest -UseBasicParsing -Uri ('https://github.com/noovoleum/it-public-scripts/releases/download/enrollment-v1/' + $name) -OutFile $staged
+        Invoke-WebRequest -UseBasicParsing -Uri ('https://github.com/noovoleum/it-public-scripts/releases/download/enrollment-v2/' + $name) -OutFile $staged
         if ((Get-FileHash -LiteralPath $staged -Algorithm SHA256).Hash -ine $hash) { throw 'Package hash mismatch; nothing installed. Contact IT.' }
         $process = Start-Process "$env:SystemRoot\System32\msiexec.exe" -ArgumentList @('/i',('"'+$staged+'"'),'/norestart') -Wait -PassThru
         if ($process.ExitCode -notin @(0,3010)) { throw "Installer failed: $($process.ExitCode). Contact IT." }
-        Write-Output 'Installed. Open Fleet Desktop > My device for MDM instructions. IT verifies fresh check-in and MDM On separately.'
+        if ($upgrade) { Write-Output 'Fleet updated. No further steps; IT verifies the next check-in.' }
+        else { Write-Output 'Installed. Open Fleet Desktop > My device for MDM instructions. IT verifies fresh check-in and MDM On separately.' }
         if ($process.ExitCode -eq 3010) { Write-Output 'Windows requests a restart; save your work and arrange it yourself. No automatic restart occurs.' }
     } finally { Remove-EnrollmentStage -Path $stage }
 }
