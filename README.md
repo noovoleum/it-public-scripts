@@ -42,6 +42,18 @@ Yes opens instructions, **not automatic removal**: Windows requires IT to select
 
 Windows checks administrator privileges before MDM discovery, consent, package download or installation. A non-elevated session stops with Start menu > PowerShell > Run as administrator instructions, the no-install outcome and the IT contact. No automatic elevation is attempted.
 
+## Microsoft 365 licenses → Snipe-IT (IT admin)
+
+`sync-m365-licenses-snipeit.py` mirrors M365 license assignments into Snipe-IT: one license per paid SKU (bound by SKU ID in *Order Number*), seats = purchased units, one seat checked out per Snipe-IT user holding that SKU. Microsoft is authoritative: seats of users who lost the SKU are checked in. It never creates or deletes Snipe-IT users and leaves asset-assigned seats alone; M365 users it cannot match (email, then username = UPN prefix, then unique full name) are listed for IT. Free/trial SKUs (10,000+ units) are skipped unless named with `--sku`.
+
+```sh
+export SNIPEIT_TOKEN=… CF_ACCESS_CLIENT_ID=… CF_ACCESS_CLIENT_SECRET=…   # from IT's credential store
+python3 sync-m365-licenses-snipeit.py           # dry run: prints the plan
+python3 sync-m365-licenses-snipeit.py --apply   # writes
+```
+
+Graph access uses a signed-in `m365` CLI (Organization.Read.All, User.Read.All), or `GRAPH_TOKEN`. No credentials live in this repository.
+
 ## Checks
 
 ```sh
@@ -53,6 +65,7 @@ pwsh -NoProfile -File test-online.ps1
 pwsh -NoProfile -File test-migration.ps1
 python3 test-bootstrap.py
 pwsh -NoProfile -File test-bootstrap.ps1
+python3 test-m365-license-sync.py
 ```
 
 These include mocked Windows native boundaries and Mac PTY consent; native Windows PowerShell 5.1, MSI/ACL installation and real-device Miradore unenrollment remain pilot acceptance gates.
