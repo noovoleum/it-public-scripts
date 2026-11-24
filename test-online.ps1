@@ -17,7 +17,7 @@ $entry=$ast.Find({param($node) $node -is [Management.Automation.Language.Functio
 if($entry.Body.EndBlock.Statements[0].Extent.Text -notmatch '^Assert-NativePowerShell '){throw 'Native-process guard must be first'}
 # Validate bound package identities and the protected trust-check-before-install ordering.
 $text=Get-Content -LiteralPath $path -Raw
-foreach($value in @('ae414eab10c533e252a05b2b0f601baeaa5b5184f3023642898ab0de8ca4a6bc','1f90986109b68be5b5aec3bf82236c7f00ab976b490c50958226596be3654057')) {
+foreach($value in @('ae414eab10c533e252a05b2b0f601baeaa5b5184f3023642898ab0de8ca4a6bc','1f90986109b68be5b5aec3bf82236c7f00ab976b490c50958226596be3654057','9e86ccab84236136795246bbc6bff71fa6d5f990bc52b2a94c95399fd0c0a788','b71ae2f81a0aa32d748b0f33798de8837292187a67e1eb679f76a8930175eecc')) {
  if($text -notmatch $value){throw 'Missing package pin'}
 }
 function Assert-TrustOrder($Tree) {
@@ -102,28 +102,43 @@ if($text -match '\$existing\s*\|\s*Where-Object'){throw 'Registry ProviderID heu
 foreach($pair in @(@('absent','install'),@('scripts-disabled','upgrade'),@('scripts-enabled','none'),@('unrecognized','refuse'),@('','refuse'))) {
  if((Get-FleetAgentAction $pair[0]) -ne $pair[1]){throw "State $($pair[0]) must map to $($pair[1])"}
 }
-# Drive the real entry point per action with every Windows boundary stubbed; record what it does.
+# Drive the real entry point per (Fleet action, remote support present) with Windows boundaries stubbed.
+$fresh='Install Fleet and remote support, and accept the disclosed security-policy impact?'
+$update='Update Fleet and install remote support now?'
+$rsOnly='Fleet is up to date. Install Noovoleum remote support?'
 foreach($case in @(
- @{action='none';     answer=$true;  mdm=0;expectPrompt=$null;exit=0;install=$false;fail=$null},
- @{action='refuse';   answer=$true;  mdm=0;expectPrompt=$null;exit=0;install=$false;fail='not recognised'},
- @{action='upgrade';  answer=$true;  mdm=0;expectPrompt='Update Fleet now?';exit=0;install=$true; fail=$null},
- @{action='upgrade';  answer=$false; mdm=0;expectPrompt='Update Fleet now?';exit=0;install=$false;fail='Cancelled. Fleet left unchanged'},
- @{action='install';  answer=$true;  mdm=1;expectPrompt='Install Fleet and accept the disclosed security-policy impact?';exit=0;install=$true;fail=$null},
- @{action='upgrade';  answer=$true;  mdm=0;expectPrompt='Update Fleet now?';exit=1603;           install=$true; fail='Do not rerun'},
- @{action='install';  answer=$true;  mdm=1;expectPrompt='Install Fleet and accept the disclosed security-policy impact?';exit=1603;install=$true;fail='^Installer failed'}
+ @{action='none';   rs=$true; answer=$true; mdm=0;prompt=$null; msi=0;agent=0;fail=$null},
+ @{action='none';   rs=$false;answer=$true; mdm=0;prompt=$rsOnly;msi=0;agent=1;fail=$null},
+ @{action='none';   rs=$false;answer=$false;mdm=0;prompt=$rsOnly;msi=0;agent=0;fail='Cancelled. Nothing changed'},
+ @{action='refuse'; rs=$false;answer=$true; mdm=0;prompt=$null; msi=0;agent=0;fail='not recognised'},
+ @{action='upgrade';rs=$false;answer=$true; mdm=0;prompt=$update;msi=1;agent=1;fail=$null},
+ @{action='upgrade';rs=$true; answer=$true; mdm=0;prompt=$update;msi=1;agent=0;fail=$null},
+ @{action='upgrade';rs=$false;answer=$false;mdm=0;prompt=$update;msi=0;agent=0;fail='Cancelled. Fleet left unchanged'},
+ @{action='upgrade';rs=$false;answer=$true; mdm=0;prompt=$update;msi=1;agent=0;exit=1603;fail='Do not rerun'},
+ @{action='install';rs=$false;answer=$true; mdm=1;prompt=$fresh; msi=1;agent=1;fail=$null},
+ @{action='install';rs=$false;answer=$true; mdm=1;prompt=$fresh; msi=1;agent=0;exit=1603;fail='^Installer failed'},
+ @{action='upgrade';rs=$false;answer=$true; mdm=0;prompt=$update;msi=1;agent=0;agentHash='bad';fail='Remote support agent hash mismatch'},
+ @{action='none';   rs=$false;answer=$true; mdm=0;prompt=$rsOnly;msi=0;agent=1;agentDead=$true;fail='Remote support did not start'}
 )) {
  & {
-  $script:c=$case;$script:mdmCalls=0;$script:prompts=@();$script:installed=$false
+  foreach($k in @('exit','agentHash','agentDead')){ if(-not $case.ContainsKey($k)){$case[$k]=$null} }
+  $script:c=$case;$script:mdmCalls=0;$script:prompts=@();$script:msi=0;$script:agent=0;$script:urls=@()
   function Assert-NativePowerShell {}
   function Assert-EnrollmentAdministrator {}
   function Get-Process { [pscustomobject]@{SessionId=1} }
   function Get-FleetAgentState { 'stub' }
   function Get-FleetAgentAction { $script:c.action }
+  function Test-RemoteSupportInstalled { if($script:agent -and -not $script:c.agentDead){$true}else{[bool]$script:c.rs} }
+  function Start-Sleep {}
   function Assert-NoExistingMdm { $script:mdmCalls++ }
   function Confirm-EnrollmentAction { param($Question) $script:prompts+=$Question; $script:c.answer }
-  function New-Item {}; function Set-Acl {}; function Invoke-WebRequest {}; function Remove-EnrollmentStage {}
-  function Get-FileHash { [pscustomobject]@{Hash=$hash} }
-  function Start-Process { $script:installed=$true; [pscustomobject]@{ExitCode=$(if($script:c.exit){$script:c.exit}else{0})} }
+  function New-Item {}; function Set-Acl {}; function Set-Content {}; function Remove-EnrollmentStage {}
+  function Invoke-WebRequest { param($Uri,$OutFile,[switch]$UseBasicParsing) $script:urls+=$Uri }
+  function Get-FileHash { param($LiteralPath) if($LiteralPath -like '*meshagent.exe'){ if($script:c.agentHash){[pscustomobject]@{Hash='BAD'}}else{[pscustomobject]@{Hash='9E86CCAB84236136795246BBC6BFF71FA6D5F990BC52B2A94C95399FD0C0A788'}} } else { [pscustomobject]@{Hash='AE414EAB10C533E252A05B2B0F601BAEAA5B5184F3023642898AB0DE8CA4A6BC'} } }
+  function Start-Process { param($FilePath,$ArgumentList,$WorkingDirectory,[switch]$Wait,[switch]$PassThru)
+   if($FilePath -like '*msiexec.exe'){ $script:msi++; return [pscustomobject]@{ExitCode=$(if($script:c.exit){$script:c.exit}else{0})} }
+   if($FilePath -like '*meshagent.exe' -and ($ArgumentList -join ' ') -eq '-fullinstall --copy-msh=1'){ $script:agent++; return [pscustomobject]@{ExitCode=0} }
+   throw "Unexpected process $FilePath $ArgumentList" }
   $env:PROCESSOR_ARCHITECTURE='AMD64'; $env:PROCESSOR_ARCHITEW6432=$null; $env:ProgramFiles=[IO.Path]::GetTempPath(); $env:SystemRoot='C:\Windows'
   # Static .NET platform/identity probes cannot be stubbed; run the real body with only those lines neutralised.
   $body=$entry.Body.Extent.Text.Trim(); $body=$body.Substring(1,$body.Length-2)
@@ -138,12 +153,27 @@ foreach($case in @(
   function New-Object { [pscustomobject]@{} }
   $message=$null
   try { $null=& ([scriptblock]::Create($body)) } catch { $message=$_.Exception.Message }
-  $label="$($case.action)/answer=$($case.answer)/exit=$($case.exit)"
+  $label="$($case.action)/rs=$($case.rs)/answer=$($case.answer)/exit=$($case.exit)/hash=$($case.agentHash)/dead=$($case.agentDead)"
   if($case.fail){ if($message -notmatch $case.fail){throw "$label expected failure '$($case.fail)', got '$message'"} } elseif($message){ throw "$label unexpected failure: $message" }
   if($script:mdmCalls -ne $case.mdm){throw "$label MDM guard calls $($script:mdmCalls), expected $($case.mdm)"}
-  if($script:installed -ne $case.install){throw "$label installer ran=$($script:installed), expected $($case.install)"}
-  $wantPrompts=@($case.expectPrompt | Where-Object {$_})
-  if(($script:prompts -join '|') -ne ($wantPrompts -join '|')){throw "$label prompts '$($script:prompts -join '|')', expected '$($wantPrompts -join '|')'"}
+  if($script:msi -ne $case.msi){throw "$label msiexec runs $($script:msi), expected $($case.msi)"}
+  if($script:agent -ne $case.agent){throw "$label remote support installs $($script:agent), expected $($case.agent)"}
+  if(($script:prompts -join '|') -ne (@($case.prompt | Where-Object {$_}) -join '|')){throw "$label prompts '$($script:prompts -join '|')'"}
+  if($script:msi -and $script:urls[0] -ne 'https://github.com/noovoleum/it-public-scripts/releases/download/enrollment-v2/fleet-windows-amd64.msi'){throw "$label wrong Fleet URL $($script:urls[0])"}
+  if($script:agent -and $script:urls[-1] -ne 'https://remote-agent.noovoleum.site/meshagents?id=4'){throw "$label wrong agent URL $($script:urls[-1])"}
+ }
+}
+# Remote-support detection: running service AND installed settings carry our group's MeshID.
+& {
+ $meshId=@($RemoteSupportSettings -split "`r?`n" | Where-Object { $_ -like 'MeshID=*' })[0]
+ if(-not $meshId -or @($RemoteSupportSettings -split "`r?`n").Count -ne 5){throw 'Remote support settings must hold exactly the 5 identity lines'}
+ $env:ProgramFiles=[IO.Path]::GetTempPath()
+ foreach($case in @(@{svc=$null;file=$null;want=$false},@{svc='Stopped';file=@($meshId);want=$false},@{svc='Running';file=$null;want=$false},@{svc='Running';file=@('MeshID=0xOTHER');want=$false},@{svc='Running';file=@('MeshName=x',"$meshId  ");want=$true})) {
+  $script:c=$case
+  function Get-Service { param($Name) if($Name -ne 'Mesh Agent'){throw "Wrong service $Name"}; if($script:c.svc){[pscustomobject]@{Status=$script:c.svc}} }
+  function Test-Path { param($LiteralPath) if($LiteralPath -notlike '*Mesh Agent*MeshAgent.msh'){throw "Wrong path $LiteralPath"}; $null -ne $script:c.file }
+  function Get-Content { param($LiteralPath) $script:c.file }
+  if((Test-RemoteSupportInstalled) -ne $case.want){throw "Remote support detection wrong for svc=$($case.svc) file=$($case.file)"}
  }
 }
 if($text -match "Get-Service\s+-Name\s+'?Orbit"){throw 'Fleet service is named "Fleet osquery", not Orbit'}
