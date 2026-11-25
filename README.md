@@ -96,3 +96,15 @@ The report is saved locally and then to the share as `laptop-<serial>.json` befo
 Finish any native enrollment prompts. IT verifies MDM On, fresh Fleet check-in and the matching Snipe-IT record. The manual checklist stays separate from the asset register. IT setup here means the existing remote-support agent; no local admin account is created and no API key is needed on the laptop.
 
 For inventory only, omit `-Provision` or `--provision`. Checks: `bash test-laptop-inventory-macos.sh` (Mac with Python 3 for the test only) and `pwsh -NoProfile -File test-laptop-inventory.ps1` (simulated Windows hardware and installer).
+
+## Provisioning the employee's local Windows account
+
+`provision-user.ps1` creates the employee's own local administrator account and lists it on the Windows sign-in screen. It asks for the username, full name and password in the window; pressing Enter at the password prompt creates a passwordless account to finish at handover. The one-liner fetches the current script on `main` and elevates via UAC:
+
+```powershell
+irm https://raw.githubusercontent.com/noovoleum/it-public-scripts/main/provision-user.ps1 | iex
+```
+
+Or run the trusted checkout copy: `powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\provision-user.ps1`.
+
+`-ExecutionPolicy Bypass` applies to this process only (no persistent execution-policy change); the UAC elevation relaunch passes the same flag to its child. The script must run from a 64-bit PowerShell (it refuses a 32-bit one, which writes the registry into the wrong view). To list the account on the sign-in screen it enables the `EnumerateLocalUsers` policy, clears the typed-username prompt (`dontdisplaylastusername`/`DontDisplayUserName` = 0) and adds a per-account `UserList` entry under `...\Windows NT\...\Winlogon\SpecialAccounts\UserList`; an MDM security baseline that reapplies these keys will undo the change at policy refresh. The account is always a local administrator; there is no standard-user variant. Windows blocks blank-password network/RDP sign-in by default, and first sign-in of a passwordless account may still walk the employee through choosing a password — enter a password in the script to skip that. IT-set passwords never expire. Rerunning is safe and fills only what is missing. Checks: `pwsh -NoProfile -File test-provision-user.ps1`.
